@@ -9,14 +9,14 @@ public class RingBuffer<T> : IReadOnlyCollection<T>
         Resize(capacity);
     }
 
-    public int Count => Full ? Capacity : GetOffsetIndex(end, -start);
+    public int Count { get; private set; }
     public int Capacity => elements.Length;
 
-    public bool Empty => start == end && !Full;
-    public bool Full { get; private set; }
+    public bool Empty => Count == 0;
+    public bool Full => Count == Capacity;
 
-    public T Back => Empty ? default : elements[GetOffsetIndex(end, -1)];
-    public T Front => Empty ? default : elements[start];
+    public T Back => Empty ? default : elements[GetOffsetIndex(Count - 1)];
+    public T Front => Empty ? default : elements[baseIndex];
 
     public IEnumerable<T> Values
     {
@@ -24,22 +24,21 @@ public class RingBuffer<T> : IReadOnlyCollection<T>
         {
             if (!Empty)
             {
-                int index = start;
-                do
+                for (int i = 0; i < Count; ++i)
                 {
-                    yield return elements[index];
-                    MoveIndexRight(ref index);
-                } while (index != end);
+                    yield return elements[GetOffsetIndex(i)];
+                }
             }
         }
     }
 
     public void Resize(int capacity)
     {
-        Debug.Assert(Empty);
-        elements = new T[capacity];
-        start = end = 0;
-        Full = false;
+        Debug.Assert(Count <= capacity);
+        T[] newBuffer = new T[capacity];
+        System.Array.Copy(elements, baseIndex, newBuffer, 0, Count);
+        elements = newBuffer;
+        baseIndex = 0;
     }
 
     public bool PushBack(in T element)
@@ -47,9 +46,9 @@ public class RingBuffer<T> : IReadOnlyCollection<T>
         bool pushed = !Full;
         if (pushed)
         {
-            elements[end] = element;
-            MoveIndexRight(ref end);
-            Full = start == end;
+            int backIndex = GetOffsetIndex(Count);
+            elements[backIndex] = element;
+            Count++;
         }
         return pushed;
     }
@@ -58,9 +57,11 @@ public class RingBuffer<T> : IReadOnlyCollection<T>
         bool pushed = !Full;
         if (pushed)
         {
-            MoveIndexLeft(ref start);
-            elements[start] = element;
-            Full = start == end;
+            int frontIndex = GetOffsetIndex(-1);
+            elements[frontIndex] = element;
+            Count++;
+
+            baseIndex = frontIndex;
         }
         return pushed;
     }
@@ -70,9 +71,9 @@ public class RingBuffer<T> : IReadOnlyCollection<T>
         bool popped = !Empty;
         if (popped)
         {
-            MoveIndexLeft(ref end);
-            element = elements[end];
-            Full = false;
+            int backIndex = GetOffsetIndex(Count - 1);
+            element = elements[backIndex];
+            Count--;
         }
         return popped;
     }
@@ -81,28 +82,19 @@ public class RingBuffer<T> : IReadOnlyCollection<T>
         bool popped = !Empty;
         if (popped)
         {
-            element = elements[start];
-            MoveIndexRight(ref start);
-            Full = false;
+            int frontIndex = baseIndex;
+            element = elements[frontIndex];
+            Count--;
+
+            baseIndex = GetOffsetIndex(1);
         }
         return popped;
     }
 
-    protected void MoveIndexRight(ref int index, int count = 1)
-    {
-        Debug.Assert(count > 0);
-        index = GetOffsetIndex(index, count);
-    }
-    protected void MoveIndexLeft(ref int index, int count = 1)
-    {
-        Debug.Assert(count > 0);
-        index = GetOffsetIndex(index, -count);
-    }
-
-    protected int GetOffsetIndex(int index, int offset)
+    protected int GetOffsetIndex(int offset)
     {
         Debug.Assert(offset < Capacity);
-        return (index + offset + Capacity) % Capacity;
+        return (baseIndex + offset + Capacity) % Capacity;
     }
 
     private struct Enumerator : IEnumerator<T>, IEnumerator
@@ -110,34 +102,30 @@ public class RingBuffer<T> : IReadOnlyCollection<T>
         public Enumerator(RingBuffer<T> ringBuffer)
         {
             this.ringBuffer = ringBuffer;
-            index = ringBuffer.start;
-            valid = !ringBuffer.Empty;
+            index = 0;
         }
 
-        public T Current => ringBuffer.elements[index];
-        object IEnumerator.Current => ringBuffer.elements[index];
+        public T Current => ringBuffer.elements[ringBuffer.GetOffsetIndex(index)];
+        object IEnumerator.Current => (this as IEnumerator<T>).Current;
 
         public bool MoveNext()
         {
-            if (valid)
+            if (index < ringBuffer.Count)
             {
-                ringBuffer.MoveIndexRight(ref index);
-                valid = index != ringBuffer.end;
+                index++;
             }
-            return valid;
+            return index < ringBuffer.Count;
         }
 
         public void Reset()
         {
-            index = ringBuffer.start;
-            valid = !ringBuffer.Empty;
+            index = 0;
         }
 
         public void Dispose() { }
 
         private RingBuffer<T> ringBuffer;
         private int index;
-        private bool valid;
     }
 
     IEnumerator<T> IEnumerable<T>.GetEnumerator() => new Enumerator(this);
@@ -145,6 +133,5 @@ public class RingBuffer<T> : IReadOnlyCollection<T>
 
     protected T[] elements = null;
 
-    protected int start = 0;
-    protected int end = 0;
+    protected int baseIndex = 0;
 }
